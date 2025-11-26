@@ -1,6 +1,5 @@
 import os
 import json
-import requests
 from requests import Session
 from requests.exceptions import RequestException
 import time
@@ -10,7 +9,7 @@ from utils import configure_logger
 import sys
 import argparse
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log, wait_random
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, Any, Union
 
 MAX_API_RETRIES = 5
 RETRY_WAIT_MIN_SECONDS = 2
@@ -28,7 +27,7 @@ logger = logging.getLogger(__name__)
         wait = wait_exponential(min = RETRY_WAIT_MIN_SECONDS, max = RETRY_WAIT_MAX_SECONDS) + wait_random(min=0, max=2), 
         retry = retry_if_exception_type(RequestException)
         )
-def _fetch_from_api(session: Session, url: str)-> Union[Dict[str, Any], List[Any]]:
+def _fetch_from_api(session: Session, url: str)-> Union[dict[str, Any], list[Any]]:
     r = session.get(url)
     r.raise_for_status()
     return r.json()
@@ -42,7 +41,7 @@ def get_puuid(game_name: str, tagline: str, region:str, session: Session) -> Opt
         if isinstance(puuid_data, dict):
             return puuid_data.get("puuid")
         else:
-            logger.error(f"puuid_data input was expected to be a dictionary, was a {type(puuid_data)} instead. URL input: {puuid_api_url}")
+            logger.error(f"puuid_data output was expected to be a dictionary, was a {type(puuid_data)}. URL input: {puuid_api_url}")
             return None
     except RequestException as e:
         logger.exception(f"Failed to pull puuid after {MAX_API_RETRIES} retries. Inputs are regions :{region}, game_name: {game_name}, tagline: {tagline}, URL: {puuid_api_url}")
@@ -50,23 +49,28 @@ def get_puuid(game_name: str, tagline: str, region:str, session: Session) -> Opt
     
     
 
-def get_match_ids(puuid: str, region:str, session: Session) -> Optional[List[str]]:
+def get_match_ids(puuid: str, region:str, session: Session) -> Optional[list[str]]:
     match_api_url = f"https://{region}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids"
     try:
         match_id_data = _fetch_from_api(session, match_api_url)
-        if isinstance(match_id_data, List):
+        if isinstance(match_id_data, list):
             return match_id_data
         else:
-            logger.error(f"puuid_data input was expected to be a dictionary, was a {type(match_id_data)} instead. URL input: {match_api_url}")
+            logger.error(f"match_id_data output was expected to be a list, was a {type(match_id_data)}. URL input: {match_api_url}")
+            return None
     except RequestException as e:
         logger.exception(f"Failed to pull match ids after {MAX_API_RETRIES} retries. Inputs are regions :{region}, puuid: {puuid}, URL: {match_api_url}")
         return None
 
-def get_match_data(region: str, match_id: str, session: Session) -> Optional[Dict[str, Any]]:
+def get_match_data(region: str, match_id: str, session: Session) -> Optional[dict[str, Any]]:
     overall_match_data_api_url = f"https://{region}.api.riotgames.com/lol/match/v5/matches/{match_id}"
     try:
         overall_match_data = _fetch_from_api(session, overall_match_data_api_url)
-        return overall_match_data
+        if isinstance(overall_match_data, dict):
+            return overall_match_data
+        else:
+            logger.error(f"overall_match_data output was expected to be a dictionary, was a {type(overall_match_data)}. URL input: {overall_match_data_api_url}")
+            return None
     except RequestException as e:
         logger.exception(f"Failed to pull match data after {MAX_API_RETRIES} retries. Inputs are regions :{region}, match_id: {match_id}, URL: {overall_match_data_api_url}")
         return None
