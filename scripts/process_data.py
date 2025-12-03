@@ -1,39 +1,82 @@
 import json
-import os
-import glob
+import sys
+import logging
 import pandas as pd
+from pathlib import Path
+from utils import configure_logger
+from typing import Optional
+import argparse
 
-def process_match_file(file_path):
+RAW_DATA_DIRECTORY = Path("data/raw")
+PROCESSED_DATA_PATH = Path("data/processed/processed_data.csv")
+LOG_FILE_NAME = "processed_data.log"
+FAILURE_THRESHOLD_RATIO = 0.1
+
+logger = logging.getLogger(__name__)
+
+def process_match_file(file_path: Path) -> Optional[pd.DataFrame]:
     try:
-        with open(file_path,"r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             processed_data = json.load(f)
-        participants_list = processed_data["info"]["participants"]
-        participants_df = pd.DataFrame(participants_list)
-        participants_df["matchId"] = processed_data["metadata"]["matchId"]
-        return participants_df
+            participants_list = processed_data["info"]["participants"]
+            participants_df = pd.DataFrame(participants_list)
+            participants_df["matchId"] = processed_data["metadata"]["matchId"]
+            return participants_df
 
-    except (FileNotFoundError, KeyError, json.JSONDecodeError, TypeError) as e:
-        print(f"An error occured while processing {file_path}: {e}")
-        return pd.DataFrame()
+    except (FileNotFoundError, KeyError,json.JSONDecodeError, TypeError) as e:
+        logger.exception(f"Failed to process file: {file_path}. Error during data extraction or transformation")
+        return None
+    
+def parse_args():
+    parser = argparse.ArgumentParser(description = "Script for processing data from ingest_data.py")
+    parser.add_argument("--input_dir", default=RAW_DATA_DIRECTORY, type=Path)
+    parser.add_argument("--output_file", default=PROCESSED_DATA_PATH, type=Path)
+    args = parser.parse_args()
+    return args
+
+
+def main(input_dir: Path, output_file: Path) -> int:
+    files = list(input_dir.glob("*.json"))
+    if not files:
+        logger.warning(f"No files were inputed from directory: {input_dir}")
+        return 0
+    valid_df = []
+    failure_count = 0
+
+    for file in files:
+        
+        df = process_match_file(file)
+        if df is None:
+            failure_count += 1
+            logger.warning(f"Skipping file: {file} due to processing error")
+        
+        else:
+            valid_df.append(df)
+        
+    total_files = len(files)
+
+    failure_ratio = failure_count / total_files
+
+    if failure_ratio >= FAILURE_THRESHOLD_RATIO:
+        logger.critical(F"Failure threshold exceeded: {FAILURE_THRESHOLD_RATIO: .2%} | Actual failure rate: {failure_ratio: .2%} | Number of failed/total files: {failure_count}/{total_files}")
+        return 1
+    if not valid_df:
+        logger.warning(f"DATA ANOMALY: Zero records were successfully processed. No output file created. (Note: Failure ratio was within configured threshold).")
+        return 0
+        
+    final_df = pd.concat(valid_df, ignore_index=True)
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    final_df.to_csv(output_file, encoding = "utf-8", index=False)
+    logger.info(f"There was {len(valid_df)} files saved to {output_file}")
+    return 0
+
 
 if __name__ == "__main__":
-    caught_data = []
-    raw_file_paths = glob.glob("data/raw/NA1*.json")
-    for file_path in raw_file_paths:
-        single_match_data = process_match_file(file_path)
-        if not single_match_data.empty:
-            caught_data.append(single_match_data)
-        else:
-            print("Dataframe is empty")
-
-    final_data = pd.concat(caught_data)
-
-
-
-    print(final_data)
-
-
-    final_data.to_csv("data/processed/match_ouput.csv", encoding = "utf=8", index = False)
+    args = parse_args()
+    configure_logger(LOG_FILE_NAME)
+    sys.exit(main(args.input_dir, args.output_file))
 
 
 

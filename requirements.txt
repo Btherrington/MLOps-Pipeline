@@ -1,16 +1,5 @@
-os
-json
 requests
-from requests.exceptions import RequestException
-time
-from dotenv import load_dotenv
-logging
-from utils import configure_logger
-sys
-argparse
+python-dotenv
 tenacity
 pandas
-from sklearn.preprocessing import MultiLabelBinarizer
-from sklearn.model_selection import train_test_split
-from logging import FileHandler, Formatter, StreamHandler
-glob
+scikit-learn
