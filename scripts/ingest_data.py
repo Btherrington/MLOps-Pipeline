@@ -82,8 +82,7 @@ def parse_args():
     parser.add_argument("--tag-line", required=True)
     parser.add_argument("--region", required=True)
     parser.add_argument("--output_dir", default=DEFAULT_RAW_DATA_DIRECTORY, type=Path)
-    args = parser.parse_args()
-    return args
+    return parser.parse_args()
 
 def main(game_name: str, tagline: str, region: str, api_key: str, output_dir: Path) -> int:
     session = Session()

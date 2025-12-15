@@ -31,8 +31,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description = "Script for processing data from ingest_data.py")
     parser.add_argument("--input_dir", default=RAW_DATA_DIRECTORY, type=Path)
     parser.add_argument("--output_file", default=PROCESSED_DATA_PATH, type=Path)
-    args = parser.parse_args()
-    return args
+    return parser.parse_args()
 
 
 def main(input_dir: Path, output_file: Path) -> int:
