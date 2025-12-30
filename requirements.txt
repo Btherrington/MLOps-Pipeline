@@ -3,3 +3,8 @@ python-dotenv
 tenacity
 pandas
 scikit-learn
+mlflow
+joblib
+fastapi
+uvicorn
+pydantic

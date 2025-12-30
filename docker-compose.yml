@@ -1,0 +1,36 @@
+version: "3.8"
+
+services:
+  lol-pipeline:
+    build: .
+    env_file:
+      - .env
+    volumes:  
+      - ./data:/app/data
+      - ./models:/app/models
+    depends_on:
+      - db
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=riot_data
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  inference:
+    build: .
+    restart: on-failure
+    volumes:
+      - ./models:/app/models
+      - ./scripts:/app/scripts
+    ports:
+      - "8000:8000"
+    command: uvicorn scripts.app:app --host 0.0.0.0 --port 8000
+    depends_on:
+      - lol-pipeline
+
+volumes:
+  postgres_data:
