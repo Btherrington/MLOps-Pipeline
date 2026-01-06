@@ -11,6 +11,8 @@ import argparse
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log, wait_random
 from typing import Optional, Any, Union
 from pathlib import Path
+from database import RawMatch, init_db, SessionLocal
+from sqlalchemy.exc import IntegrityError
 
 MAX_API_RETRIES = 5
 RETRY_WAIT_MIN_SECONDS = 2
@@ -19,17 +21,34 @@ LOG_FILE_NAME = "ingest.log"
 FAILURE_RATIO_ALLOWED = 0.1
 TIME_SLEEP_NUMBER = 1.5
 DEFAULT_RAW_DATA_DIRECTORY = Path("data/raw")
+TIMEOUT = 10
 
+#Creates a logger instance, __name__ parameter logs with the name of the current file
 logger = logging.getLogger(__name__)
 
+
+def save_match(match_id, match_data):
+    db = SessionLocal()
+    try:
+        match = RawMatch(match_id=match_id, data=match_data)
+        db.merge(match)
+        db.commit()
+    finally:
+        db.close()
+
+#Retry decorator, before_sleep_log, logs a message before sleeping and retrying, rest is max retries, how long to wait, and solving "Thundering Herd" problem
 @retry(
         before_sleep = before_sleep_log(logger, logging.WARNING), 
         stop = stop_after_attempt(MAX_API_RETRIES), 
         wait = wait_exponential(min = RETRY_WAIT_MIN_SECONDS, max = RETRY_WAIT_MAX_SECONDS) + wait_random(min=0, max=2), 
+        #If the exception type is a network type issue then retry, not if code error
         retry = retry_if_exception_type(RequestException)
         )
+#Function that takes the session and url as parameter, type of each are Session and Str respectiviely. 
 def _fetch_from_api(session: Session, url: str)-> Union[dict[str, Any], list[Any]]:
-    r = session.get(url)
+    #Session keeps the line open, gets the url, if it takes longer then 10s then cut the hanging request
+    r = session.get(url, timeout=TIMEOUT)
+    #Raise an error for network request error
     r.raise_for_status()
     return r.json()
     
@@ -84,58 +103,55 @@ def parse_args():
     parser.add_argument("--output_dir", default=DEFAULT_RAW_DATA_DIRECTORY, type=Path)
     return parser.parse_args()
 
-def main(game_name: str, tagline: str, region: str, api_key: str, output_dir: Path) -> int:
-    session = Session()
-    session.headers["X-Riot-Token"] = api_key
+def main(args: argparse.Namespace, api_key: str) -> int:
+    init_db()
+    with Session() as session:
+        session.headers["X-Riot-Token"] = api_key
 
-    output_dir.mkdir(parents=True ,exist_ok=True)
-    logger.info("Attempting to retrieve puuid")
-    player_puuid = get_puuid(game_name, tagline, region, session)
-    if not player_puuid:
-        logger.error(f"Unsuccessful pull of player id, Game name: {game_name}, Tagline: {tagline}, Region: {region}")
-        return 1 
-    logger.info(f"Successful player id pull")
+        args.output_dir.mkdir(parents=True ,exist_ok=True)
+        logger.info("Attempting to retrieve puuid")
+        player_puuid = get_puuid(args.game_name, args.tag_line, args.region, session)
+        if not player_puuid:
+            logger.error(f"Unsuccessful pull of player id, Game name: {args.game_name}, Tagline: {args.tag_line}, Region: {args.region}")
+            return 1 
+        logger.info(f"Successful player id pull")
 
-    match_ids = get_match_ids(player_puuid, region, session)
-    if match_ids is None:
-        logger.error(f"Unable to pull match id from API, inputs; player_puuid: {player_puuid} and REGION: {region}, script is stopping.")
-        return 1
+        match_ids = get_match_ids(player_puuid, args.region, session)
+        if match_ids is None:
+            logger.error(f"Unable to pull match id from API, inputs; player_puuid: {player_puuid} and REGION: {args.region}, script is stopping.")
+            return 1
 
 
-    total_failures = 0
-    number_of_match_ids = (len(match_ids))
-    logger.info(f"There is {number_of_match_ids} match ids being pulled")
-    if number_of_match_ids == 0:
-        logger.warning(f"API data anomaly detected, API returned 0 matches. No new data to process")
-        return 0
+        total_failures = 0
+        number_of_match_ids = (len(match_ids))
+        logger.info(f"There is {number_of_match_ids} match ids being pulled")
+        if number_of_match_ids == 0:
+            logger.warning(f"API data anomaly detected, API returned 0 matches. No new data to process")
+            return 0
 
-    for match_id in match_ids:
-        time.sleep(TIME_SLEEP_NUMBER)
-        single_match_data = get_match_data(region, match_id, session)
-        file_path = output_dir / f"{match_id}.json"
-        if not single_match_data:
-            logger.warning(f"Data point was missing {match_id}, script continuing")
-            total_failures += 1
-            continue
-
-        try:
-            with open(file_path,"w", encoding="utf-8") as f:
-                json.dump(single_match_data,f, indent=4)
-        except (IOError, PermissionError) as e:
-            logger.exception(f"Failed to write json match file: {e}")
-            total_failures += 1
-            continue
+        for match_id in match_ids:
+            time.sleep(TIME_SLEEP_NUMBER)
+            single_match_data = get_match_data(args.region, match_id, session)
+            if not single_match_data:
+                logger.warning(f"Data point was missing {match_id}, script continuing")
+                total_failures += 1
+                continue
+            try:
+                save_match(match_id, single_match_data)
+            except (Exception) as e:
+                logger.exception(f"Failed to save match to db: {e}")
+                total_failures += 1
+                continue
     
-    actual_failure_ratio = total_failures/number_of_match_ids
-    if actual_failure_ratio >= FAILURE_RATIO_ALLOWED:
-        logger.critical(f"Failure threshold exceeded: {FAILURE_RATIO_ALLOWED: .2%} | Actual error percent = {actual_failure_ratio: .2%} | Raw count (total failed and total number of matches): ({total_failures}/{number_of_match_ids})")
-        return 1
-    else:
-        success_count = number_of_match_ids - total_failures
-        logger.info(f"Ingestion complete, successfully saved {success_count} matches to {output_dir}")
-        return 0
-
-        
+        actual_failure_ratio = total_failures/number_of_match_ids
+        if actual_failure_ratio >= FAILURE_RATIO_ALLOWED:
+            logger.critical(f"Failure threshold exceeded: {FAILURE_RATIO_ALLOWED: .2%} | Actual error percent = {actual_failure_ratio: .2%} | Raw count (total failed and total number of matches): ({total_failures}/{number_of_match_ids})")
+            return 1
+        else:
+            success_count = number_of_match_ids - total_failures
+            logger.info(f"Ingestion complete, successfully saved {success_count} matches to {args.output_dir}")
+            return 0
+                
         
         
 
@@ -149,4 +165,4 @@ if __name__ == "__main__":
         logger.critical("Critical error, missing env variable: RIOT_API_KEY")
         sys.exit(1)
     
-    sys.exit(main(args.game_name, args.tag_line, args.region, api_key, args.output_dir))
+    sys.exit(main(args, api_key))
